@@ -56,6 +56,10 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
+
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class LocalMediaSynchronizer @Inject constructor(
     private val mediumDao: MediumDao,
     private val mediumStateDao: MediumStateDao,
@@ -445,8 +449,9 @@ class LocalMediaSynchronizer @Inject constructor(
         if (!dir.exists() || !dir.isDirectory) return
 
         val isVolumeRoot = dir.path in volumeRoots
+        val parent = dir.parent
         val isRootAndroid = dir.name.equals("Android", ignoreCase = true) &&
-            dir.parent in volumeRoots
+            parent != null && parent in volumeRoots
         if (isRootAndroid) return
 
         val isHidden = dir.isHiddenPath(volumeRoots)
