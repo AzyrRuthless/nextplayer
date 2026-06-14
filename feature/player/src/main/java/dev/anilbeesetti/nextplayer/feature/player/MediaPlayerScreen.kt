@@ -30,6 +30,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -37,9 +39,12 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -74,6 +79,14 @@ import dev.anilbeesetti.nextplayer.feature.player.state.rememberTapGestureState
 import dev.anilbeesetti.nextplayer.feature.player.state.rememberVideoZoomAndContentScaleState
 import dev.anilbeesetti.nextplayer.feature.player.state.rememberVolumeAndBrightnessGestureState
 import dev.anilbeesetti.nextplayer.feature.player.state.rememberVolumeState
+import android.app.Activity
+import android.graphics.Bitmap
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.view.PixelCopy
+import androidx.activity.compose.LocalActivity
+import androidx.compose.runtime.DisposableEffect
 import dev.anilbeesetti.nextplayer.feature.player.extensions.nameRes
 import dev.anilbeesetti.nextplayer.feature.player.state.seekAmountFormatted
 import dev.anilbeesetti.nextplayer.feature.player.state.seekToPositionFormated
@@ -84,7 +97,12 @@ import dev.anilbeesetti.nextplayer.feature.player.ui.SubtitleConfiguration
 import dev.anilbeesetti.nextplayer.feature.player.ui.VerticalProgressView
 import dev.anilbeesetti.nextplayer.feature.player.ui.controls.ControlsBottomView
 import dev.anilbeesetti.nextplayer.feature.player.ui.controls.ControlsTopView
+import android.view.Window
+import android.graphics.Rect
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.delay
 
 val LocalControlsVisibilityState = compositionLocalOf<ControlsVisibilityState?> { null }
 
@@ -148,6 +166,98 @@ fun MediaPlayerScreen(
     )
     val errorState = rememberErrorState(player = player)
 
+    val activity = LocalActivity.current
+    var isAmbientModeEnabled by rememberSaveable { mutableStateOf(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) }
+    var ambientColor by remember { mutableStateOf(Color.Black) }
+
+    var pixelCopyHandler by remember { mutableStateOf<Handler?>(null) }
+    val destBitmap = remember { Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888) }
+    val sampleRect = remember { android.graphics.Rect() }
+
+    DisposableEffect(isAmbientModeEnabled) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isAmbientModeEnabled) {
+            val thread = HandlerThread("PixelCopyThread").apply { start() }
+            pixelCopyHandler = Handler(thread.looper)
+            onDispose {
+                thread.quitSafely()
+                pixelCopyHandler = null
+            }
+        } else {
+            onDispose {
+                pixelCopyHandler = null
+            }
+        }
+    }
+
+    LaunchedEffect(player.isPlaying, isAmbientModeEnabled) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isAmbientModeEnabled) {
+            val window = activity?.window
+            while (player.isPlaying) {
+                delay(500)
+                val handler = pixelCopyHandler
+                if (window != null && handler != null) {
+                    val rect = pictureInPictureState.videoRect
+                    if (rect.width() > 100 && rect.height() > 100) {
+                        val centerX = rect.centerX()
+                        val centerY = rect.centerY()
+                        val wOffset = (rect.width() * 0.2f).toInt()
+                        val hOffset = (rect.height() * 0.2f).toInt()
+
+                        val points = listOf(
+                            Pair(centerX, rect.top + hOffset),       // Top-Center
+                            Pair(centerX, rect.bottom - hOffset),    // Bottom-Center
+                            Pair(rect.left + wOffset, centerY),      // Left-Center
+                            Pair(rect.right - wOffset, centerY)      // Right-Center
+                        )
+
+                        var redSumAccum = 0L
+                        var greenSumAccum = 0L
+                        var blueSumAccum = 0L
+                        var successfulSamples = 0
+
+                        for ((px, py) in points) {
+                            sampleRect.set(px - 5, py - 5, px + 5, py + 5)
+                            val result = awaitPixelCopy(window, sampleRect, destBitmap, handler)
+                            if (result == PixelCopy.SUCCESS) {
+                                for (x in 0 until 10) {
+                                    for (y in 0 until 10) {
+                                        val color = destBitmap.getPixel(x, y)
+                                        redSumAccum += android.graphics.Color.red(color)
+                                        greenSumAccum += android.graphics.Color.green(color)
+                                        blueSumAccum += android.graphics.Color.blue(color)
+                                    }
+                                }
+                                successfulSamples++
+                            }
+                        }
+
+                        if (successfulSamples > 0) {
+                            val pixelCount = successfulSamples * 100
+                            val avgRed = (redSumAccum / pixelCount).toInt()
+                            val avgGreen = (greenSumAccum / pixelCount).toInt()
+                            val avgBlue = (blueSumAccum / pixelCount).toInt()
+
+                            val hsv = FloatArray(3)
+                            android.graphics.Color.RGBToHSV(avgRed, avgGreen, avgBlue, hsv)
+                            hsv[1] = (hsv[1] * 1.5f).coerceAtMost(1.0f) // Boost Saturation by 50%
+                            hsv[2] = (hsv[2] * 1.2f).coerceAtMost(1.0f) // Boost Value/Brightness by 20%
+                            val vibrantColor = android.graphics.Color.HSVToColor(hsv)
+                            ambientColor = Color(vibrantColor)
+                        }
+                    }
+                }
+            }
+        } else {
+            ambientColor = Color.Black
+        }
+    }
+
+    val animatedAmbientColor by animateColorAsState(
+        targetValue = ambientColor,
+        animationSpec = tween(1000),
+        label = "ambient_glow_color"
+    )
+
     LaunchedEffect(pictureInPictureState.isInPictureInPictureMode) {
         if (pictureInPictureState.isInPictureInPictureMode) {
             controlsVisibilityState.hideControls()
@@ -179,7 +289,19 @@ fun MediaPlayerScreen(
             Box(
                 modifier = modifier
                     .fillMaxSize()
-                    .background(Color.Black),
+                    .drawBehind {
+                        drawRect(Color.Black)
+                        drawRect(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    animatedAmbientColor.copy(alpha = 0.65f),
+                                    Color.Black
+                                ),
+                                center = center,
+                                radius = size.maxDimension / 1.1f
+                            )
+                        )
+                    },
             ) {
                 PlayerContentFrame(
                     player = player,
@@ -316,6 +438,8 @@ fun MediaPlayerScreen(
                                     },
                                     videoContentScale = videoZoomAndContentScaleState.videoContentScale,
                                     isPipSupported = pictureInPictureState.isPipSupported,
+                                    isAmbientModeEnabled = isAmbientModeEnabled,
+                                    onAmbientModeToggle = { isAmbientModeEnabled = !isAmbientModeEnabled },
                                     onSeek = seekGestureState::onSeek,
                                     onSeekEnd = seekGestureState::onSeekEnd,
                                     onRotateClick = rotationState::rotate,
@@ -488,5 +612,24 @@ fun PlayerControlsView(
         }
 
         middleView()
+    }
+}
+
+private suspend fun awaitPixelCopy(
+    window: Window,
+    sourceRect: Rect,
+    destBitmap: Bitmap,
+    handler: Handler
+): Int = suspendCancellableCoroutine { continuation ->
+    try {
+        PixelCopy.request(window, sourceRect, destBitmap, { result ->
+            if (continuation.isActive) {
+                continuation.resume(result)
+            }
+        }, handler)
+    } catch (e: Throwable) {
+        if (continuation.isActive) {
+            continuation.resume(PixelCopy.ERROR_UNKNOWN)
+        }
     }
 }

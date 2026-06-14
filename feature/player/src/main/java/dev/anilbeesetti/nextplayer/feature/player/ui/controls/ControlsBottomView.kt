@@ -76,6 +76,8 @@ fun ControlsBottomView(
     controlsAlignment: Alignment.Horizontal,
     videoContentScale: VideoContentScale,
     isPipSupported: Boolean,
+    isAmbientModeEnabled: Boolean,
+    onAmbientModeToggle: () -> Unit,
     onVideoContentScaleClick: () -> Unit,
     onVideoContentScaleLongClick: () -> Unit,
     onLockControlsClick: () -> Unit,
@@ -183,6 +185,17 @@ fun ControlsBottomView(
             LoopButton(player = player)
             AbRepeatButton(state = mediaPresentationState)
             ShuffleButton(player = player)
+            PlayerButton(onClick = onAmbientModeToggle) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_brightness),
+                    contentDescription = null,
+                    tint = if (isAmbientModeEnabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    }
+                )
+            }
         }
     }
 }

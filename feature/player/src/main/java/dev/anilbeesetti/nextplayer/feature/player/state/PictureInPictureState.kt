@@ -84,6 +84,9 @@ class PictureInPictureState(
     var isInPictureInPictureMode: Boolean by mutableStateOf(false)
         private set
 
+    var videoRect: Rect by mutableStateOf(Rect())
+        private set
+
     private var lastAppliedSourceRectHint: Rect? = null
     private var lastAppliedAspectRatio: Rational? = null
     private var lastAppliedAutoEnterEnabled: Boolean? = null
@@ -100,6 +103,7 @@ class PictureInPictureState(
     }
 
     fun setVideoViewRect(rect: Rect) {
+        videoRect = rect
         if (pictureInPictureParamsBuilder == null) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         if (rect.width() <= 0 || rect.height() <= 0) return
