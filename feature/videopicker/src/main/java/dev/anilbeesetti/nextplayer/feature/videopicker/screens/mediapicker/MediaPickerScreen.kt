@@ -1,6 +1,7 @@
 package dev.anilbeesetti.nextplayer.feature.videopicker.screens.mediapicker
 
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -142,6 +143,11 @@ internal fun MediaPickerScreen(
 ) {
     val selectionManager = rememberSelectionManager()
     val permissionState = rememberPermissionState(permission = storagePermission)
+    val notificationPermissionState = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        rememberPermissionState(permission = android.Manifest.permission.POST_NOTIFICATIONS)
+    } else {
+        null
+    }
     val lazyGridState = rememberLazyGridState()
     val selectVideoFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -359,7 +365,10 @@ internal fun MediaPickerScreen(
             }
 
             is DataState.Loading -> {
-                CenterCircularProgressBar(modifier = Modifier.padding(scaffoldPadding))
+                CenterCircularProgressBar(
+                    modifier = Modifier.padding(scaffoldPadding),
+                    progress = uiState.refreshingProgress,
+                )
             }
 
             is DataState.Success -> {
@@ -371,7 +380,14 @@ internal fun MediaPickerScreen(
                         .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                         .background(MaterialTheme.colorScheme.background),
                     isRefreshing = uiState.refreshing,
-                    onRefresh = { onEvent(MediaPickerUiEvent.Refresh) },
+                    onRefresh = {
+                        onEvent(MediaPickerUiEvent.Refresh)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            if (notificationPermissionState?.status?.isGranted == false) {
+                                notificationPermissionState.launchPermissionRequest()
+                            }
+                        }
+                    },
                 ) {
                     val updatedScaffoldPadding = scaffoldPadding.copy(top = 0.dp, start = 0.dp)
                     PermissionMissingView(

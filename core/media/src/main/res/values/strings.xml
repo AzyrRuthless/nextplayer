@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="syncing_media_library">Syncing Media Library</string>
+    <string name="scanning_progress">Scanning… %1$d%%</string>
+    <string name="notification_channel_sync_name">Media Library Synchronization</string>
+    <string name="notification_channel_sync_desc">Shows progress of media library scanning</string>
+</resources>

@@ -1,14 +1,25 @@
 package dev.anilbeesetti.nextplayer.core.media.sync
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.ContentObserver
+import android.media.MediaMetadataRetriever
+import android.os.Build
 import android.provider.MediaStore
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.flow.sample
 import coil3.ImageLoader
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.anilbeesetti.nextplayer.core.common.Dispatcher
 import dev.anilbeesetti.nextplayer.core.common.NextDispatchers
+import dev.anilbeesetti.nextplayer.core.common.NotificationIds
+import dev.anilbeesetti.nextplayer.core.media.R
 import dev.anilbeesetti.nextplayer.core.common.di.ApplicationScope
 import dev.anilbeesetti.nextplayer.core.common.extensions.VIDEO_COLLECTION_URI
 import dev.anilbeesetti.nextplayer.core.common.extensions.getStorageVolumes
@@ -21,7 +32,9 @@ import dev.anilbeesetti.nextplayer.core.database.dao.MediumDao
 import dev.anilbeesetti.nextplayer.core.database.dao.MediumStateDao
 import dev.anilbeesetti.nextplayer.core.database.entities.DirectoryEntity
 import dev.anilbeesetti.nextplayer.core.database.entities.MediumEntity
+import dev.anilbeesetti.nextplayer.core.datastore.datasource.AppPreferencesDataSource
 import dev.anilbeesetti.nextplayer.core.media.model.MediaVideo
+import dev.anilbeesetti.nextplayer.core.model.ApplicationPreferences
 import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineDispatcher
@@ -30,26 +43,38 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
 class LocalMediaSynchronizer @Inject constructor(
     private val mediumDao: MediumDao,
     private val mediumStateDao: MediumStateDao,
     private val directoryDao: DirectoryDao,
     private val imageLoader: ImageLoader,
+    private val appPreferencesDataSource: AppPreferencesDataSource,
     @ApplicationScope private val applicationScope: CoroutineScope,
     @ApplicationContext private val context: Context,
     @Dispatcher(NextDispatchers.IO) private val dispatcher: CoroutineDispatcher,
 ) : MediaSynchronizer {
 
     private var mediaSyncingJob: Job? = null
+    private var progressNotificationJob: Job? = null
+
+    @Volatile private var isChannelCreated = false
+
+
+    private val _syncProgress = MutableStateFlow(-1)
+    override val syncProgress: StateFlow<Int> = _syncProgress.asStateFlow()
 
     override suspend fun refresh(path: String?): Boolean {
         return path?.let { context.scanPaths(listOf(path)) }
@@ -58,14 +83,96 @@ class LocalMediaSynchronizer @Inject constructor(
 
     override fun startSync() {
         if (mediaSyncingJob != null) return
-        mediaSyncingJob = getMediaVideosFlow().onEach { media ->
-            applicationScope.launch { updateDirectories(media) }
-            applicationScope.launch { updateMedia(media) }
+        startProgressNotificationCollector()
+        mediaSyncingJob = combine(
+            getMediaVideosFlow(),
+            appPreferencesDataSource.preferences,
+            ::Pair
+        ).mapLatest { (media, preferences) ->
+            withContext(dispatcher) {
+                getFinalMediaList(media, preferences)
+            }
+        }.onEach { finalMediaList ->
+            applicationScope.launch { updateDirectories(finalMediaList) }
+            applicationScope.launch { updateMedia(finalMediaList) }
         }.launchIn(applicationScope)
     }
 
     override fun stopSync() {
         mediaSyncingJob?.cancel()
+        mediaSyncingJob = null
+        stopProgressNotificationCollector()
+    }
+
+    private fun startProgressNotificationCollector() {
+        if (progressNotificationJob != null) return
+
+        progressNotificationJob = applicationScope.launch(dispatcher) {
+            try {
+                _syncProgress
+                    .sample(500L)
+                    .collect { progress ->
+                        updateNotification(progress)
+                    }
+            } finally {
+                cancelNotification()
+            }
+        }
+    }
+
+    private fun stopProgressNotificationCollector() {
+        progressNotificationJob?.cancel()
+        progressNotificationJob = null
+        cancelNotification()
+    }
+
+    private fun createNotificationChannel() {
+        if (isChannelCreated) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val name = context.getString(R.string.notification_channel_sync_name)
+            val descriptionText = context.getString(R.string.notification_channel_sync_desc)
+            val importance = NotificationManager.IMPORTANCE_LOW
+            val channel = NotificationChannel(NotificationIds.MEDIA_SYNC_CHANNEL_ID, name, importance).apply {
+                description = descriptionText
+            }
+            val notificationManager = ContextCompat.getSystemService(context, NotificationManager::class.java)
+            notificationManager?.createNotificationChannel(channel)
+        }
+        isChannelCreated = true
+    }
+
+    private fun updateNotification(progress: Int) {
+        val notificationManager = ContextCompat.getSystemService(context, NotificationManager::class.java) ?: return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+
+        if (progress in 0..100) {
+            createNotificationChannel()
+
+            val notificationBuilder = NotificationCompat.Builder(context, NotificationIds.MEDIA_SYNC_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setContentTitle(context.getString(R.string.syncing_media_library))
+                .setContentText(context.getString(R.string.scanning_progress, progress))
+                .setProgress(100, progress, false)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+                notificationBuilder.setRequestPromotedOngoing(true)
+            }
+
+            notificationManager.notify(NotificationIds.MEDIA_SYNC_NOTIFICATION_ID, notificationBuilder.build())
+        } else {
+            notificationManager.cancel(NotificationIds.MEDIA_SYNC_NOTIFICATION_ID)
+        }
+    }
+
+    private fun cancelNotification() {
+        val notificationManager = ContextCompat.getSystemService(context, NotificationManager::class.java)
+        notificationManager?.cancel(NotificationIds.MEDIA_SYNC_NOTIFICATION_ID)
     }
 
     private suspend fun updateDirectories(media: List<MediaVideo>) =
@@ -100,15 +207,24 @@ class LocalMediaSynchronizer @Inject constructor(
             parentPath = parentFolder?.path ?: "/",
         )
 
-        val subDirectories = currentFolder.listFiles { file ->
-            file.isDirectory && media.any { it.data.startsWith(file.path) }
-        }?.flatMap { file ->
-            getDirectoryEntities(
-                parentFolder = currentFolder,
-                currentFolder = file,
-                media = media,
-            )
-        } ?: emptyList()
+        // Use media file paths instead of File.listFiles() to derive subdirectories.
+        // This avoids Android 11+ Scoped Storage restrictions where listFiles() returns null
+        // for directories we cannot enumerate directly without MANAGE_EXTERNAL_STORAGE.
+        val subDirectories = media
+            .filter { it.data.startsWith("${currentFolder.path}/") }
+            .mapNotNull { video ->
+                val remaining = video.data.removePrefix("${currentFolder.path}/")
+                val segment = remaining.substringBefore("/")
+                if ("/" in remaining) File(currentFolder, segment) else null
+            }
+            .distinctBy { it.path }
+            .flatMap { file ->
+                getDirectoryEntities(
+                    parentFolder = currentFolder,
+                    currentFolder = file,
+                    media = media,
+                )
+            }
 
         return listOf(currentDirectoryEntity) + subDirectories
     }
@@ -242,7 +358,148 @@ class LocalMediaSynchronizer @Inject constructor(
         return mediaVideos.filter { File(it.data).exists() }
     }
 
+    private suspend fun getFinalMediaList(
+        mediaStoreList: List<MediaVideo>,
+        preferences: ApplicationPreferences
+    ): List<MediaVideo> {
+        // No supplementary scan needed: MediaStore behavior already matches defaults.
+        if (!preferences.showHidden && preferences.recognizeNomedia) {
+            return mediaStoreList
+        }
+
+        val manualList = scanStorageForVideos(preferences)
+
+        val mediaByPath = mediaStoreList.associateBy { it.data }.toMutableMap()
+
+        val missingVideos = manualList.filter { !mediaByPath.containsKey(it.data) }
+        val missingCount = missingVideos.size
+        var processedCount = 0
+
+        if (missingCount > 0) {
+            _syncProgress.value = 0
+        }
+
+        try {
+            for (manualVideo in missingVideos) {
+                // Cooperative cancellation point. Note: if retriever.setDataSource blocks or hangs
+                // (e.g., due to corrupt files or slow IO), cancellation will be delayed until this yield().
+                kotlinx.coroutines.yield()
+                val updatedVideo = try {
+                    MediaMetadataRetriever().use { retriever ->
+                        retriever.setDataSource(manualVideo.data)
+                        val duration = retriever
+                            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                            ?.toLongOrNull() ?: 0L
+                        val width = retriever
+                            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                            ?.toIntOrNull() ?: 0
+                        val height = retriever
+                            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                            ?.toIntOrNull() ?: 0
+                        manualVideo.copy(duration = duration, width = width, height = height)
+                    }
+                } catch (e: Throwable) {
+                    manualVideo
+                }
+                mediaByPath[updatedVideo.data] = updatedVideo
+                processedCount++
+                _syncProgress.value = (processedCount * 100) / missingCount
+            }
+        } finally {
+            if (missingCount > 0) {
+                _syncProgress.value = -1
+            }
+        }
+
+        return mediaByPath.values.toList()
+    }
+
+    private fun scanStorageForVideos(preferences: ApplicationPreferences): List<MediaVideo> {
+        val result = mutableListOf<MediaVideo>()
+        val volumes = context.getStorageVolumes()
+        val volumeRoots = volumes.map { it.path }.toSet()
+        for (volume in volumes) {
+            scanDirectory(volume, VIDEO_EXTENSIONS, preferences, result, volumeRoots)
+        }
+        return result
+    }
+
+    private fun File.isHiddenPath(volumeRoots: Set<String>): Boolean {
+        var current: File? = this
+        while (current != null && current.path !in volumeRoots) {
+            if (current.name.startsWith(".")) {
+                return true
+            }
+            current = current.parentFile
+        }
+        return false
+    }
+
+    private fun scanDirectory(
+        dir: File,
+        extensions: Set<String>,
+        preferences: ApplicationPreferences,
+        result: MutableList<MediaVideo>,
+        volumeRoots: Set<String>
+    ) {
+        if (!dir.exists() || !dir.isDirectory) return
+
+        val isVolumeRoot = dir.path in volumeRoots
+        val isRootAndroid = dir.name.equals("Android", ignoreCase = true) &&
+            dir.parent in volumeRoots
+        if (isRootAndroid) return
+
+        val isHidden = dir.isHiddenPath(volumeRoots)
+        if (!preferences.showHidden && isHidden) return
+
+        val files = dir.listFiles() ?: return
+
+        // Skip dirs that contain .nomedia, UNLESS:
+        // - This is a volume root (root-level .nomedia should not block the entire storage), OR
+        // - showHidden is true AND this is a hidden path (user explicitly wants to see it).
+        if (preferences.recognizeNomedia && !isVolumeRoot) {
+            val shouldRespectNomedia = !(preferences.showHidden && isHidden)
+            if (shouldRespectNomedia) {
+                val hasNomedia = files.any { it.name.equals(".nomedia", ignoreCase = true) }
+                if (hasNomedia) return
+            }
+        }
+
+        for (file in files) {
+            if (file.isDirectory) {
+                scanDirectory(file, extensions, preferences, result, volumeRoots)
+            } else {
+                if (!preferences.showHidden && file.name.startsWith(".")) continue
+                val ext = file.extension.lowercase()
+                if (ext in extensions) {
+                    val size = file.length()
+                    if (size > 0) {
+                        val uri = android.net.Uri.fromFile(file)
+                        // Use a synthetic 64-bit ID derived from the file path, forced negative to avoid MediaStore ID collisions.
+                        val id = java.util.UUID.nameUUIDFromBytes(file.path.toByteArray()).mostSignificantBits or Long.MIN_VALUE
+                        result.add(
+                            MediaVideo(
+                                id = id,
+                                data = file.path,
+                                duration = 0L,
+                                uri = uri,
+                                width = 0,
+                                height = 0,
+                                size = size,
+                                dateModified = file.lastModified() / 1000L,
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     companion object {
+        private val VIDEO_EXTENSIONS = setOf(
+            "mp4", "mkv", "webm", "avi", "flv", "3gp", "3g2", "ts", "mts", "m2ts", "vob", "ogv", "mov", "qt", "wmv", "asf"
+        )
+
         val VIDEO_PROJECTION = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DATA,

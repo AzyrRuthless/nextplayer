@@ -66,6 +66,14 @@ class MediaPickerViewModel @Inject constructor(
                 }
             }
         }
+
+        viewModelScope.launch {
+            mediaSynchronizer.syncProgress.collect { progress ->
+                uiStateInternal.update { currentState ->
+                    currentState.copy(refreshingProgress = progress)
+                }
+            }
+        }
     }
 
     fun onEvent(event: MediaPickerUiEvent) {
@@ -135,6 +143,7 @@ data class MediaPickerUiState(
     val folderName: String?,
     val mediaDataState: DataState<Folder?> = DataState.Loading,
     val refreshing: Boolean = false,
+    val refreshingProgress: Int = -1,
     val preferences: ApplicationPreferences = ApplicationPreferences(),
 )
 
