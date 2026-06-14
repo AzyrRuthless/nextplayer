@@ -33,6 +33,8 @@ class MediaLibraryPreferencesViewModel @Inject constructor(
     fun onEvent(event: MediaLibraryPreferencesUiEvent) {
         when (event) {
             MediaLibraryPreferencesUiEvent.ToggleMarkLastPlayedMedia -> toggleMarkLastPlayedMedia()
+            MediaLibraryPreferencesUiEvent.ToggleShowHidden -> toggleShowHidden()
+            MediaLibraryPreferencesUiEvent.ToggleRecognizeNomedia -> toggleRecognizeNomedia()
         }
     }
 
@@ -40,6 +42,22 @@ class MediaLibraryPreferencesViewModel @Inject constructor(
         viewModelScope.launch {
             preferencesRepository.updateApplicationPreferences {
                 it.copy(markLastPlayedMedia = !it.markLastPlayedMedia)
+            }
+        }
+    }
+
+    private fun toggleShowHidden() {
+        viewModelScope.launch {
+            preferencesRepository.updateApplicationPreferences {
+                it.copy(showHidden = !it.showHidden)
+            }
+        }
+    }
+
+    private fun toggleRecognizeNomedia() {
+        viewModelScope.launch {
+            preferencesRepository.updateApplicationPreferences {
+                it.copy(recognizeNomedia = !it.recognizeNomedia)
             }
         }
     }
@@ -51,4 +69,6 @@ data class MediaLibraryPreferencesUiState(
 
 sealed interface MediaLibraryPreferencesUiEvent {
     data object ToggleMarkLastPlayedMedia : MediaLibraryPreferencesUiEvent
+    data object ToggleShowHidden : MediaLibraryPreferencesUiEvent
+    data object ToggleRecognizeNomedia : MediaLibraryPreferencesUiEvent
 }

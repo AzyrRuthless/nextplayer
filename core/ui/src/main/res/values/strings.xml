@@ -97,6 +97,12 @@
     <string name="scanning_storage">Scanning storage…</string>
     <string name="manage_folders">Manage folders</string>
     <string name="manage_folders_desc">Select folders to be excluded in the media library</string>
+    <string name="show_hidden_files_and_folders">Show hidden files and folders</string>
+    <string name="show_hidden_files_and_folders_desc">Show files and folders that start with a dot</string>
+    <string name="recognize_nomedia">Recognize .nomedia</string>
+    <string name="recognize_nomedia_desc">Hide folders containing .nomedia files</string>
+    <string name="all_files_access_required">All files access required</string>
+    <string name="all_files_access_desc">To scan hidden files and folders on Android 11 and above, Next Player needs All Files Access permission. Please grant it in the next screen.</string>
     <string name="video">Video</string>
     <string name="videos">Videos</string>
     <string name="screen_rotation">Screen Rotation</string>

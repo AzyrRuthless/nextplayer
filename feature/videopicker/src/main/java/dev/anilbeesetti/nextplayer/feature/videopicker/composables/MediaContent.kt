@@ -29,7 +29,7 @@ import dev.anilbeesetti.nextplayer.core.ui.designsystem.NextIcons
 const val CIRCULAR_PROGRESS_INDICATOR_TEST_TAG = "circularProgressIndicator"
 
 @Composable
-fun CenterCircularProgressBar(modifier: Modifier = Modifier) {
+fun CenterCircularProgressBar(modifier: Modifier = Modifier, progress: Int = -1) {
     Column(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -38,6 +38,13 @@ fun CenterCircularProgressBar(modifier: Modifier = Modifier) {
         CircularProgressIndicator(
             modifier = Modifier.testTag(CIRCULAR_PROGRESS_INDICATOR_TEST_TAG),
         )
+        if (progress >= 0) {
+            Spacer(modifier = Modifier.size(16.dp))
+            Text(
+                text = stringResource(id = R.string.scanning_storage) + " $progress%",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
     }
 }
 

@@ -359,7 +359,10 @@ internal fun MediaPickerScreen(
             }
 
             is DataState.Loading -> {
-                CenterCircularProgressBar(modifier = Modifier.padding(scaffoldPadding))
+                CenterCircularProgressBar(
+                    modifier = Modifier.padding(scaffoldPadding),
+                    progress = uiState.refreshingProgress,
+                )
             }
 
             is DataState.Success -> {

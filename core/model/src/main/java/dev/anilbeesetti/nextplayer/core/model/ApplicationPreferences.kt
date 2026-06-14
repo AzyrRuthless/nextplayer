@@ -12,6 +12,8 @@ data class ApplicationPreferences(
     val markLastPlayedMedia: Boolean = true,
     val excludeFolders: List<String> = emptyList(),
     val mediaViewMode: MediaViewMode = MediaViewMode.FOLDERS,
+    val showHidden: Boolean = false,
+    val recognizeNomedia: Boolean = true,
     val mediaLayoutMode: MediaLayoutMode = MediaLayoutMode.LIST,
 
     // Fields
