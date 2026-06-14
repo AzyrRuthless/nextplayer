@@ -12,6 +12,8 @@ import androidx.compose.runtime.setValue
 import androidx.media3.common.Player
 import androidx.media3.common.listen
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.PlayerMessage
 import dev.anilbeesetti.nextplayer.feature.player.extensions.formatted
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.coroutineScope
@@ -46,6 +48,62 @@ class MediaPresentationState(
     var isBuffering: Boolean by mutableStateOf(false)
         private set
 
+    var abRepeatPointA: Long? by mutableStateOf(null)
+        private set
+
+    var abRepeatPointB: Long? by mutableStateOf(null)
+        private set
+
+    private var abRepeatMessage: PlayerMessage? = null
+
+    fun toggleAbRepeat() {
+        val pointA = abRepeatPointA
+        if (pointA == null) {
+            abRepeatPointA = position
+        } else if (abRepeatPointB == null) {
+            val currentPos = position
+            if (currentPos > pointA) {
+                abRepeatPointB = currentPos
+                player.seekTo(pointA)
+                scheduleAbRepeatMessage(pointA, currentPos)
+            } else {
+                resetAbRepeat()
+            }
+        } else {
+            resetAbRepeat()
+        }
+    }
+
+    fun resetAbRepeat() {
+        abRepeatPointA = null
+        abRepeatPointB = null
+        cancelAbRepeatMessage()
+    }
+
+    private fun scheduleAbRepeatMessage(pointA: Long, pointB: Long) {
+        val exoPlayer = (player as? ExoPlayer) ?: return
+        cancelAbRepeatMessage()
+
+        abRepeatMessage = exoPlayer.createMessage { _, _ ->
+            val currentPointA = abRepeatPointA
+            val currentPointB = abRepeatPointB
+            if (currentPointA != null && currentPointB != null) {
+                player.seekTo(currentPointA)
+                updatePosition()
+            }
+        }.apply {
+            setPosition(pointB)
+            setDeleteAfterDelivery(false)
+            setLooper(exoPlayer.applicationLooper)
+            send()
+        }
+    }
+
+    private fun cancelAbRepeatMessage() {
+        abRepeatMessage?.cancel()
+        abRepeatMessage = null
+    }
+
     suspend fun observe() {
         updatePosition()
         updateDuration()
@@ -63,6 +121,9 @@ class MediaPresentationState(
                         )
                     ) {
                         updateDuration()
+                        if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
+                            resetAbRepeat()
+                        }
                     }
 
                     if (events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED)) {
@@ -75,6 +136,13 @@ class MediaPresentationState(
 
                     if (events.contains(Player.EVENT_POSITION_DISCONTINUITY)) {
                         updatePosition()
+                        val pointA = abRepeatPointA
+                        val pointB = abRepeatPointB
+                        if (pointA != null && pointB != null) {
+                            if (position < (pointA - 200L) || position > pointB) {
+                                resetAbRepeat()
+                            }
+                        }
                     }
 
                     if (events.containsAny(Player.EVENT_IS_LOADING_CHANGED)) {

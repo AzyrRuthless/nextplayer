@@ -56,6 +56,7 @@ import dev.anilbeesetti.nextplayer.core.model.VideoContentScale
 import dev.anilbeesetti.nextplayer.core.ui.R
 import dev.anilbeesetti.nextplayer.core.ui.extensions.copy
 import dev.anilbeesetti.nextplayer.feature.player.LocalUseMaterialYouControls
+import dev.anilbeesetti.nextplayer.feature.player.buttons.AbRepeatButton
 import dev.anilbeesetti.nextplayer.feature.player.buttons.LoopButton
 import dev.anilbeesetti.nextplayer.feature.player.buttons.PlayerButton
 import dev.anilbeesetti.nextplayer.feature.player.buttons.ShuffleButton
@@ -180,6 +181,7 @@ fun ControlsBottomView(
                 )
             }
             LoopButton(player = player)
+            AbRepeatButton(state = mediaPresentationState)
             ShuffleButton(player = player)
         }
     }
